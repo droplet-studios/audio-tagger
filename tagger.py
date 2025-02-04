@@ -24,9 +24,14 @@ for module in ['eyed3', 'requests']:
 class Album():
     def __init__(self):
         self.path = ''
+        self.folder_name = ''
+        self.songs = []
         self.title = ''
         self.artist = ''
         self.cover = None
+        self.mbid = ''
+
+albums = []
 
 def start():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -49,8 +54,6 @@ def start():
     search(directory_tree)
 
 def search(directory_tree):
-    target_folders = []
-
     directory_tree.sort() # sort names of albums
     for group in directory_tree:
         group[2].sort() # sort songs within the albums
@@ -58,74 +61,72 @@ def search(directory_tree):
     for (parent_directory, folders, files) in directory_tree:
         for file in files:
             if os.path.splitext(file)[1] == '.mp3':
-                if parent_directory not in target_folders:
-                    target_folders.append(parent_directory)
-    process_albums(target_folders)
+                albums.append(Album())
+                albums[-1].path = parent_directory
+                albums[-1].songs = [file for file in files if os.path.splitext(file)[1] == '.mp3']
+                albums[-1].folder_name = parent_directory.split('/')[-1:][0] # get name of folder without rest of path
+                break
+    
+    process_albums()
 
-def process_albums(target_folders):
-    folder_names = [folder.split('/')[-1:][0] for folder in target_folders] # get name of folder without rest of path
-
-    folders = list(zip(target_folders, folder_names)) # make tuple with the full file path and the folder name itself 
-
-    index = 0
-    for folder in folders:
-        print(f'The folder named \'{folder[1]}\' is selected.')
+def process_albums():
+    for album in albums:
+        print(f'The folder named \'{album.folder_name}\' is selected.')
+        print('This name will be used to query the MusicBrainz for album info.')
         print('Options: (c)ontinue (enter), (r)ename, (s)kip')
         while True:
             response = input('process> ').lower()
             if response == 'c' or response == 'continue' or response == '':
-                get_album_info(folder[1])
+                get_album_info(album)
                 break
             elif response == 'r' or response == 'rename':
-                new_name = rename_folder(folder)
-                folders[index] = new_name
-                get_album_info(folder[1])
+                rename_folder(album)
                 break
             elif response == 's' or response == 'skip':
                 break
             else:
                 print('Invalid option. Please try again.')
-        index += 1
 
-def get_album_info(name):
+def get_album_info(album):
     print('Searching for album metadata...')
 
     url = 'https://musicbrainz.org/ws/2/release'
     try:
         response = requests.get(url=url,
-                                params={'query': 'release:' + name, 'fmt': 'json'},
+                                params={'query': 'release:' + album.folder_name, 'fmt': 'json'},
                                 headers={'User-Agent': 'AudioTagger/1.0 (jellymanlvspizza@gmail.com)'})
-        
         response.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
         print(http_err)
     except Exception as err:
         print(err)
+
     print(response.url)
     response = response.json()
     selected = check_info(response['releases'])
-    
-    if selected:
+    print(selected)
+    if selected == 'redo':
+        rename_folder(album)
+    elif selected == 'manual':
+        manual_input(album)
+    else:
+        album.title = selected['title']
+        album.artist = selected['artist-credit'][0]['name']
         print('Searching for album cover art...')
         mbid = selected['id']
         try:
             response = requests.get(f'https://coverartarchive.org/release/{mbid}/')
             response.raise_for_status()
-
+            response = response.json()
             image = requests.get(response['images'][0]['image'])
             image.raise_for_status()
-
+            album.cover = image
         except requests.exceptions.HTTPError as http_err:
             print(http_err)
         except Exception as err:
             print(err)
-
-        album = Album()
-        album.title = selected['title']
-        album.artist = selected['artist-credit'][0]['name']
-        album.cover = image
         
-def rename_folder(folder):
+def rename_folder(album):
     print('Enter a new name.')
     while True:
         new_name = input('> ')
@@ -134,38 +135,37 @@ def rename_folder(folder):
         else:
             break
         print('The name cannot include the character \'/\'.')
-
-    new_path = '/'.join(folder[0].split('/')[:-1]) + '/' + new_name # create string with new path to renamed folder
-
+    new_path = '/'.join(album.path.split('/')[:-1]) + '/' + new_name # create string with new path to renamed folder
     try:
-        os.rename(folder[0], new_path)
-        return (new_path, new_name)
+        os.rename(album.path, new_path)
+        album.folder_name = new_name
+        album.path = new_path
     except:
         print('Unable to change folder name. Continuing...')
-        return folder
+    get_album_info(album)
 
-def check_info(albums, index=0):
-    print(albums)
-    print(index)
+def check_info(query, index=0):
     print('The following match has been found:')
-    print(f'Album title: {albums[index]['title']}')
-    print(f'Artist: {albums[index]['artist-credit'][0]['name']}')
-    print('Options: (s)elect (enter), (n)ext, (p)revious, (m)anual metadata input')
+    print(f'Album title: {query[index]['title']}')
+    print(f'Artist: {query[index]['artist-credit'][0]['name']}')
+    print('Options: (s)elect (enter), (n)ext, (p)revious, (r)edo search, (m)anual metadata input')
     while True:
         response = input('check> ').lower()
         if response == 's' or response == 'select' or response == '':
-            selection = albums[index]
-            break
-        elif (response == 'n' or response == 'next') and index < len(albums) - 1:
-            check_info(albums, index+1)
+            return query[index]
+        elif (response == 'n' or response == 'next') and index < len(query) - 1:
+            return check_info(query, index+1)
         elif (response == 'p' or response == 'previous') and index > 0:
-            check_info(albums, index-1)
+            return check_info(query, index-1)
+        elif response == 'r' or response == 'redo search':
+            return 'redo'
         elif response == 'm' or response == 'manual metadata input':
-            selection = None
-            break
+            return 'manual'
         else:
             print('Invalid option. Please try again.')
-    return selection
+
+def manual_input(album):
+    pass
 
 def check_metadata():
     pass

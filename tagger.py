@@ -4,14 +4,15 @@
 import os
 import sys
 import importlib
-import urllib
-import urllib.parse
 
 # these should be removed when not testing
+import PIL.Image
 import eyed3
 import requests
+import PIL
+import shutil
 
-for module in ['eyed3', 'requests']:
+for module in ['eyed3', 'requests', 'PIL']:
     try:
         lib = importlib.import_module(module)
     except ImportError:
@@ -28,16 +29,14 @@ class Album():
         self.songs = []
         self.title = ''
         self.artist = ''
-        self.cover = None
+        self.cover = ''
         self.mbid = ''
 
 albums = []
 
 def start():
     os.system('cls' if os.name == 'nt' else 'clear')
-
     print('Welcome to Audio Tagger! \nTo get started, please enter the directory containing mp3 files to be tagged, organised into folders by albums.')
-
     while True:
         try:
             # path = input('> ')
@@ -50,15 +49,14 @@ def start():
             break
         except FileNotFoundError:
             print('Directory not found. Please try another directory.')
-
     search(directory_tree)
 
 def search(directory_tree):
     directory_tree.sort() # sort names of albums
     for group in directory_tree:
         group[2].sort() # sort songs within the albums
-
     for (parent_directory, folders, files) in directory_tree:
+
         for file in files:
             if os.path.splitext(file)[1] == '.mp3':
                 albums.append(Album())
@@ -66,7 +64,6 @@ def search(directory_tree):
                 albums[-1].songs = [file for file in files if os.path.splitext(file)[1] == '.mp3']
                 albums[-1].folder_name = parent_directory.split('/')[-1:][0] # get name of folder without rest of path
                 break
-    
     process_albums()
 
 def process_albums():
@@ -86,6 +83,10 @@ def process_albums():
                 break
             else:
                 print('Invalid option. Please try again.')
+        print(album.path)
+        print(album.title)
+        print(album.artist)
+        print(album.cover)
 
 def get_album_info(album):
     print('Searching for album metadata...')
@@ -97,9 +98,7 @@ def get_album_info(album):
                                 headers={'User-Agent': 'AudioTagger/1.0 (jellymanlvspizza@gmail.com)'})
         response.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
-        print(http_err)
-    except Exception as err:
-        print(err)
+        print(f'HTTP error when getting album metadata: {http_err}')
 
     print(response.url)
     response = response.json()
@@ -118,13 +117,18 @@ def get_album_info(album):
             response = requests.get(f'https://coverartarchive.org/release/{mbid}/')
             response.raise_for_status()
             response = response.json()
-            image = requests.get(response['images'][0]['image'])
-            image.raise_for_status()
-            album.cover = image
         except requests.exceptions.HTTPError as http_err:
-            print(http_err)
-        except Exception as err:
-            print(err)
+            print(f'HTTP error when searching for cover art: {http_err}')
+        try:
+            print('Downloading cover art...')
+            image = requests.get(response['images'][0]['thumbnails']['500'])
+            image.raise_for_status()
+            print('Saving cover art...')
+            with open(album.path + '/cover.jpg', 'wb') as cover_file:
+                cover_file.write(image.content)
+            album.cover = album.path + '/cover.jpg'
+        except requests.exceptions.HTTPError as http_err:
+            print(f'HTTP error when downloading cover art: {http_err}')
         
 def rename_folder(album):
     print('Enter a new name.')
@@ -165,9 +169,43 @@ def check_info(query, index=0):
             print('Invalid option. Please try again.')
 
 def manual_input(album):
-    pass
+    while True:
+        title = input('Enter the title of the album:\n> ')
+        if title.replace(' ', '') != '':
+            album.title = title
+            break
+    while True:
+        artist = input('Enter the artist of the album:\n> ')
+        if artist.replace(' ', '') != '':
+            album.artist = artist
+            break
+    while True:
+        image_path = input('Enter the path to the album cover image:\n> ')
+        if image_path[:1] == '\'' and image_path[-1:] == '\'':
+                image_path = image_path[1:-1]
+        try:
+            image = PIL.Image.open(image_path)
+            break
+        except OSError as err:
+            print('The image path is invalid.')
+            print(err)
+    path, ext = os.path.splitext(image_path)
+    if ext != '.jpg' and ext != '.jpeg':
+        print('Converting file to JPEG...')
+        try:
+            image = image.convert('RGB')
+            image.save(album.path + '/cover.jpg', 'JPEG')
+        except OSError:
+            print('The image could not be converted to JPEG.')
+    else:
+        shutil.copy(image_path, album.path + '/cover.jpg')
+    album.cover = album.path + '/cover.jpg'
+
 
 def check_metadata():
+    pass
+
+def finish():
     pass
 
 start()

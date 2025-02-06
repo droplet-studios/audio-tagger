@@ -33,6 +33,7 @@ class Album():
         self.mbid = ''
 
 albums = []
+count = 0
 
 def start():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -56,41 +57,53 @@ def search(directory_tree):
     for group in directory_tree:
         group[2].sort() # sort songs within the albums
     for (parent_directory, folders, files) in directory_tree:
-
         for file in files:
             if os.path.splitext(file)[1] == '.mp3':
                 albums.append(Album())
                 albums[-1].path = parent_directory
-                albums[-1].songs = [file for file in files if os.path.splitext(file)[1] == '.mp3']
+                albums[-1].songs = [parent_directory + '/' + file for file in files if os.path.splitext(file)[1] == '.mp3']
                 albums[-1].folder_name = parent_directory.split('/')[-1:][0] # get name of folder without rest of path
                 break
     process_albums()
 
+def has_metadata(album):
+    for track in album.songs:
+        try:
+            file = eyed3.load(track)
+            if file.tag.album == None:
+                return False
+            elif file.tag.album_artist == None:
+                return False
+        except Exception as err:
+            print(err)
+            return False
+    return True
+
 def process_albums():
     for album in albums:
         print(f'The folder named \'{album.folder_name}\' is selected.')
-        print('This name will be used to query the MusicBrainz for album info.')
-        print('Options: (c)ontinue (enter), (r)ename, (s)kip')
-        while True:
-            response = input('process> ').lower()
-            if response == 'c' or response == 'continue' or response == '':
-                get_album_info(album)
-                break
-            elif response == 'r' or response == 'rename':
-                rename_folder(album)
-                break
-            elif response == 's' or response == 'skip':
-                break
-            else:
-                print('Invalid option. Please try again.')
-        print(album.path)
-        print(album.title)
-        print(album.artist)
-        print(album.cover)
-
+        if has_metadata(album):
+            print('Metadata is already detected on the tracks of this album. Skipping...')
+        else:
+            print('The folder name will be used to query the MusicBrainz for album info.')
+            print('Options: (c)ontinue (enter), (r)ename, (s)kip')
+            while True:
+                response = input('> ').lower()
+                if response == 'c' or response == 'continue' or response == '':
+                    get_album_info(album)
+                    break
+                elif response == 'r' or response == 'rename':
+                    rename_folder(album)
+                    break
+                elif response == 's' or response == 'skip':
+                    break
+                else:
+                    print('Invalid option. Please try again.')
+            if response != 's' and response != 'skip':
+                add_metadata(album)
+        
 def get_album_info(album):
     print('Searching for album metadata...')
-
     url = 'https://musicbrainz.org/ws/2/release'
     try:
         response = requests.get(url=url,
@@ -99,11 +112,12 @@ def get_album_info(album):
         response.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
         print(f'HTTP error when getting album metadata: {http_err}')
-
-    print(response.url)
     response = response.json()
-    selected = check_info(response['releases'])
-    print(selected)
+    if len(response['releases']) != 0:
+        selected = check_info(response['releases'])
+    else:
+        print('No match found. Please try again with a different name.')
+        selected = 'redo'
     if selected == 'redo':
         rename_folder(album)
     elif selected == 'manual':
@@ -119,16 +133,20 @@ def get_album_info(album):
             response = response.json()
         except requests.exceptions.HTTPError as http_err:
             print(f'HTTP error when searching for cover art: {http_err}')
-        try:
-            print('Downloading cover art...')
-            image = requests.get(response['images'][0]['thumbnails']['500'])
-            image.raise_for_status()
-            print('Saving cover art...')
-            with open(album.path + '/cover.jpg', 'wb') as cover_file:
-                cover_file.write(image.content)
-            album.cover = album.path + '/cover.jpg'
-        except requests.exceptions.HTTPError as http_err:
-            print(f'HTTP error when downloading cover art: {http_err}')
+        if len(response['images']) != 0:
+            try:
+                print('Downloading cover art...')
+                image = requests.get(response['images'][0]['image'])
+                image.raise_for_status()
+                print('Saving cover art...')
+                with open(album.path + '/cover.jpg', 'wb') as cover_file:
+                    cover_file.write(image.content)
+                album.cover = album.path + '/cover.jpg'
+                print(f'Cover art saved to {album.cover}')
+            except requests.exceptions.HTTPError as http_err:
+                print(f'HTTP error when downloading cover art: {http_err}')
+        else:
+            album.cover = None
         
 def rename_folder(album):
     print('Enter a new name.')
@@ -154,7 +172,7 @@ def check_info(query, index=0):
     print(f'Artist: {query[index]['artist-credit'][0]['name']}')
     print('Options: (s)elect (enter), (n)ext, (p)revious, (r)edo search, (m)anual metadata input')
     while True:
-        response = input('check> ').lower()
+        response = input('> ').lower()
         if response == 's' or response == 'select' or response == '':
             return query[index]
         elif (response == 'n' or response == 'next') and index < len(query) - 1:
@@ -201,11 +219,38 @@ def manual_input(album):
         shutil.copy(image_path, album.path + '/cover.jpg')
     album.cover = album.path + '/cover.jpg'
 
-
-def check_metadata():
-    pass
+def add_metadata(album):
+    global count
+    print('Adding metadata to album tracks...')
+    i = 1
+    for track in album.songs:
+        try:
+            file = eyed3.load(track)
+            file.tag.album = album.title
+            file.tag.album_artist = album.artist
+            file.tag.track_num = i
+            if album.cover != None:
+                file.tag.images.set(3, open(album.cover, 'rb').read(), 'image/jpeg')
+            file.tag.save()
+        except Exception as err:
+            print(f'Unable to save metadata on the track \'{track}\': {err}')
+        i += 1
+    print(f'Album metadata was written to the tracks in the album \'{album.title}\'. To edit metadata further, please use another program such as iTunes. Press enter to continue.')
+    input()
+    count += 1
 
 def finish():
-    pass
+    print(f'Thank you for using Audio Tagger. Metadata has been added to {count} albums.')
 
-start()
+def main():
+    try:
+        start()
+    except KeyboardInterrupt:
+        finish()
+        print('Exiting...')
+        sys.exit()
+    else:
+        finish()
+
+if __name__ == '__main__':
+    main()
